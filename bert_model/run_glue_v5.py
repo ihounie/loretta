@@ -181,7 +181,7 @@ def main():
         from peft import get_peft_model, LorTaConfig, TaskType, LoraConfig
         peft_config = LorTaConfig(r=our_args.tensor_rank,
                             lora_alpha=our_args.lora_alpha,
-                            target_modules=["q", "k", "v", "o"],  # target_modules,
+                            target_modules=["query", "key", "value", "attention.output.dense"],#["q", "k", "v", "o"],  # target_modules,
                             lora_dropout=0.0,
                             bias="none",
                             modules_to_save=None,
