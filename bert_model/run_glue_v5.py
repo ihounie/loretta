@@ -58,7 +58,7 @@ class OurArguments(TrainingArguments):
     no_auto_device: bool = (
         False  # do not load model by auto device; should turn this on when using FSDP
     )
-    wandb_project: str = "camera-ready"
+    wandb_project: str = "loretta-glue"
     logging_dir: str = "./logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # parameter setup for PEFT methods
@@ -177,6 +177,21 @@ def main():
                                  lora_alpha=our_args.lora_alpha,
                                  lora_dropout=0)
         model = get_peft_model(model, peft_config)
+    if our_args.tuning_type == 'lorta':
+        from peft import get_peft_model, LorTaConfig, TaskType, LoraConfig
+        peft_config = LorTaConfig(r=our_args.tensor_rank,
+                            lora_alpha=our_args.lora_alpha,
+                            target_modules=["q", "k", "v", "o"],  # target_modules,
+                            lora_dropout=0.0,
+                            bias="none",
+                            modules_to_save=None,
+                            task_type=TaskType.SEQ_CLS)
+        #breakpoint()
+        model = get_peft_model(model, peft_config)
+        #breakpoint()
+        peft_config = LoraConfig(r=16, lora_alpha=our_args.lora_alpha, target_modules=["out_proj"],  lora_dropout=0.0, bias="none", task_type=TaskType.SEQ_CLS)
+        #breakpoint()
+        model.classifier = get_peft_model(model.classifier, peft_config)
     if our_args.tuning_type == 'adapters':
         from peft_local import BottleneckConfig, get_peft_model, TaskType  # noqa: E402
         bottleneck_size: int = 64
