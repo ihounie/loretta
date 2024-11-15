@@ -49,6 +49,7 @@ class ModelArguments:
 class OurArguments(TrainingArguments):
     # dataset and sampling strategy
     evaluate_during_training: bool = True
+    load_best_model_at_end: bool = True
     logging_steps: int = 1000
     lr_scheduler_type: str = 'constant'
     load_float16: bool = False  # load model parameters as float16
@@ -189,7 +190,7 @@ def main():
         #breakpoint()
         model = get_peft_model(model, peft_config)
         #breakpoint()
-        peft_config = LoraConfig(r=16, lora_alpha=our_args.lora_alpha, target_modules=["out_proj"],  lora_dropout=0.0, bias="none", task_type=TaskType.SEQ_CLS)
+        peft_config = LoraConfig(r=our_args.tensor_rank, lora_alpha=our_args.lora_alpha, target_modules=["out_proj"],  lora_dropout=0.0, bias="none", task_type=TaskType.SEQ_CLS)
         #breakpoint()
         model.classifier = get_peft_model(model.classifier, peft_config)
     if our_args.tuning_type == 'adapters':
@@ -393,27 +394,31 @@ def main():
             eval_results.update(eval_result)
 
     if our_args.do_predict:
-
         test_results = {}
         logging.info("*** Test ***")
         test_datasets = [test_dataset]
         for test_dataset in test_datasets:
+            set_labels_to_zero = lambda example: {'labels': 0, 'label': 0}
+            test_dataset = test_dataset.map(set_labels_to_zero)
             predictions = trainer.predict(test_dataset=test_dataset).predictions
             if output_mode == "classification":
                 predictions = np.argmax(predictions, axis=1)
             output_test_file = os.path.join(
-                our_args.output_dir, f"test_results_{test_dataset.args.task_name}.txt"
+                our_args.output_dir, f"test_results_{data_args.task_name}.txt"
             )
             if trainer.is_world_process_zero():
                 with open(output_test_file, "w") as writer:
-                    logger.info("***** Test results {} *****".format(test_dataset.args.task_name))
+                    logger.info("***** Test results {} *****".format(data_args.task_name))
                     writer.write("index\tprediction\n")
                     for index, item in enumerate(predictions):
                         if output_mode == "regression":
                             writer.write("%d\t%3.3f\n" % (index, item))
                         else:
-                            item = test_dataset.get_labels()[item]
                             writer.write("%d\t%s\n" % (index, item))
+                # Log the text file as an artifact
+                artifact = wandb.Artifact(name="predictions", type="text")
+                artifact.add_file(output_test_file)
+                wandb.log_artifact(artifact)
     return eval_results
 
 
