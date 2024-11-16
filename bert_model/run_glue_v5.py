@@ -52,6 +52,7 @@ class OurArguments(TrainingArguments):
     load_best_model_at_end: bool = True
     logging_steps: int = 1000
     lr_scheduler_type: str = 'constant'
+    full_classifier: bool = False
     load_float16: bool = False  # load model parameters as float16
     load_bfloat16: bool = False  # load model parameters as bfloat16
     load_int8: bool = False  # load model parameters as int8
@@ -77,7 +78,7 @@ class OurArguments(TrainingArguments):
     rep_bottleneck: int = 8
     rep_alpha: int = 16
     # LoRA
-    lora_alpha: int = 16  # alpha in LoRA
+    lora_alpha: float = 16.0  # alpha in LoRA
     lora_r: int = 8  # r in LoRA
 
     adapter_size: int = 64
@@ -94,7 +95,7 @@ def get_parameter_number(net):
         if param.requires_grad:
             print(f'name {name} shape {param.shape} dtype {param.dtype}')
     total_num = sum(p.numel() for p in net.parameters()) / 1000 / 1000
-    trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad) / 1000 / 1000
+    trainable_num = sum(p.numel() for name, p in net.named_parameters() if p.requires_grad and "lora_" in name) / 1000 / 1000
     wandb.log({"Total(M)": total_num, "Trainable(M)": trainable_num})
     return {'Total(M)': total_num, 'Total Trainable(M)': trainable_num}
 
@@ -190,9 +191,10 @@ def main():
         #breakpoint()
         model = get_peft_model(model, peft_config)
         #breakpoint()
-        peft_config = LoraConfig(r=our_args.tensor_rank, lora_alpha=our_args.lora_alpha, target_modules=["out_proj"],  lora_dropout=0.0, bias="none", task_type=TaskType.SEQ_CLS)
-        #breakpoint()
-        model.classifier = get_peft_model(model.classifier, peft_config)
+        if not our_args.full_classifier:
+            peft_config = LoraConfig(r=our_args.tensor_rank, lora_alpha=our_args.lora_alpha, target_modules=["out_proj"],  lora_dropout=0.0, bias="none", task_type=TaskType.SEQ_CLS)
+            #breakpoint()
+            model.classifier = get_peft_model(model.classifier, peft_config)
     if our_args.tuning_type == 'adapters':
         from peft_local import BottleneckConfig, get_peft_model, TaskType  # noqa: E402
         bottleneck_size: int = 64
