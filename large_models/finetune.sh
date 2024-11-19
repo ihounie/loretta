@@ -34,6 +34,8 @@ elif [ "$MODE" == "ft" ]; then
     TYPE="ft"
 elif [ "$MODE" == "ia3" ]; then
     TYPE="ia3"
+elif [ "$MODE" == "lorta" ]; then
+    TYPE="lorta"
 fi
 TAG=$MODE-$EPOCH-$BS-$LR-$SEED
 
@@ -46,16 +48,19 @@ case $TASK in
         ;;
     Copa) # It has <1000 training examples. Only use 100 for dev
         DEV=100
-        TASK_ARGS="--train_as_classification False"
+        GA=$(expr $BS / 1)
+        BS=1
+        echo "Gradient accumulation: $GA"
+        TASK_ARGS="--gradient_accumulation_steps $GA --train_as_classification False"
         ;;
     MultiRC) # Can only fit real bsz = 2 on 80G A100
-        GA=$(expr $BS / 2)
+        GA=$(expr $BS / 1)
         BS=1
         echo "Gradient accumulation: $GA"
         TASK_ARGS="--gradient_accumulation_steps $GA"
         ;;
     ReCoRD) # Can only fit real bsz = 2 on 80G A100
-        GA=$(expr $BS / 2)
+        GA=$(expr $BS / 1)
         BS=1
         echo "Gradient accumulation: $GA"
         TASK_ARGS="--gradient_accumulation_steps $GA --train_as_classification False"
@@ -93,14 +98,13 @@ echo "Extra args: $EXTRA_ARGS $TASK_ARGS"
 #    $TASK_ARGS \
 #    "$@"
 
-python run.py \
+CUDA_VISIBLE_DEVICES=$DEVICE python run.py \
     --model_name $MODEL \
     --task_name $TASK \
-    --output_dir /data/public/result/$TASK-${MODEL_NAME}-$RANK-$TAG --tag $TAG --tuning_type $TYPE --train_set_seed $SEED --num_train $TRAIN --num_dev $DEV --num_eval $EVAL --logging_steps 10 \
+    --output_dir ./results/$TASK-${MODEL_NAME}-$RANK-$TAG --tag $TAG --tuning_type $TYPE --train_set_seed $SEED --num_train $TRAIN --num_dev $DEV --num_eval $EVAL --logging_steps 10 \
     --trainer $TRAINER --rank $RANK \
     --learning_rate $LR --num_train_epochs $EPOCH --per_device_train_batch_size $BS \
-    --load_best_model_at_end --evaluation_strategy steps --eval_step 200 --save_strategy steps --save_step 200 --save_total_limit 1 \
-    --train_as_classification \
+    --load_best_model_at_end --evaluation_strategy steps --eval_step 50 --save_strategy steps --save_step 50 --save_total_limit 1 \
     $EXTRA_ARGS \
     $TASK_ARGS \
     "$@"

@@ -11,6 +11,7 @@ import wandb
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
 
 
+from transformers import Trainer
 @dataclass
 class OurArguments(TrainingArguments):
     # dataset and sampling strategy
@@ -100,6 +101,7 @@ class OurArguments(TrainingArguments):
     # Auto saving when interrupted
     save_on_interrupt: bool = False # save model when interrupted (useful for long training)
 
+    remove_unused_columns: bool=False 
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -150,6 +152,7 @@ class Framework:
                 model = AutoModelForCausalLM.from_pretrained(
                     self.args.model_name,
                     config=config,
+                    low_cpu_mem_usage=True,
                 )
             else:
                 # Auto device loading
@@ -164,8 +167,15 @@ class Framework:
                     device_map='auto',
                     torch_dtype=torch_dtype,
                     load_in_8bit=self.args.load_int8,
+                    low_cpu_mem_usage=True,
                 )
             model.eval()
+
+            # Check for NaNs
+            for name, param in model.named_parameters():
+                if torch.isnan(param).any():
+                    raise ValueError(f"NaN values found in parameter {name} immediately after loading")
+            
 
         # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.args.model_name, use_fast=False)
@@ -188,6 +198,17 @@ class Framework:
                 r=self.args.lora_r,
                 lora_alpha=self.args.lora_alpha,
                 target_modules=None,
+                lora_dropout=0,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            model = get_peft_model(model, config)
+        if self.args.tuning_type == 'lorta':
+            from peft import LorTaConfig, get_peft_model
+            config = LorTaConfig(
+                r=self.args.lora_r,
+                lora_alpha=self.args.lora_alpha,
+                target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj'],
                 lora_dropout=0,
                 bias="none",
                 task_type="CAUSAL_LM",
@@ -466,7 +487,7 @@ class Framework:
                     else:
                         data.append({"input_ids": encoded_candidates[correct_candidate_id], "labels": encoded_candidates[correct_candidate_id], "option_len": option_lens[correct_candidate_id]})
                 else:
-                    data.append({"input_ids": encoded_candidates[correct_candidate_id], "labels": encoded_candidates[correct_candidate_id]})
+                    data.append({"input_ids": encoded_candidates[correct_candidate_id], "labels": encoded_candidates[correct_candidate_id], "option_len": option_lens[correct_candidate_id]})
             return data
 
         with count_time("Tokenizing training samples"):
@@ -528,7 +549,6 @@ class Framework:
                         weight_mean = torch.mean(param.data).item()
                         wandb.log({f"mean_{idx}": weight_mean, "epoch": state.epoch})
                         model.train()
-
         trainer = Trainer(
             model=self.model,
             args=self.args,
@@ -593,11 +613,14 @@ def main():
     set_seed(args.seed)
     task = get_task(args.task_name)
     print(f'check {args.num_dev}')
-    train_sets = task.sample_train_sets(num_train=args.num_train, num_dev=args.num_dev, num_eval=args.num_eval, num_train_sets=args.num_train_sets, seed=args.train_set_seed)
+    if args.num_train>0:
+        train_sets = task.sample_train_sets(num_train=args.num_train, num_dev=args.num_dev, num_eval=args.num_eval, num_train_sets=args.num_train_sets, seed=args.train_set_seed)
+    else:
+        train_sets = [task.samples["train"]]
     wandb_run_name = str(args.task_name) + '-' + str(args.model_name.replace('/', '-')) + '-' \
                      + str(args.learning_rate) + '-' \
                      + str(args.tuning_type.replace('_', '-')) + '-rank-' + str(args.lora_r)
-    wandb.init(project="<camera-ready>", name=wandb_run_name)
+    wandb.init(project="loretta-llama", name=wandb_run_name)
     # Initialize trainer and load model
     if args.trainer == 'gpt':
         # zero-shot training with openai API
@@ -670,6 +693,8 @@ def main():
                             dev_metrics = framework.evaluate([], dev_samples)
                             for m in dev_metrics:
                                 metrics["dev_" + m] = dev_metrics[m]
+                        for metric in metrics:  
+                            wandb.log({metric: metrics[metric]})
                 else:
                     print(f'check {args.num_dev}')
                     # assert args.num_dev is None
@@ -680,7 +705,7 @@ def main():
                     logger.info("===== Train set %d =====" % train_set_seed)
                     logger.info(metrics)
                     if args.local_rank <= 0:
-                        write_metrics_to_file(metrics, "result/" + result_file_tag(args) + f"-trainset{train_set_id}-rank-{args.rank}" + ".json" if args.result_file is None else args.result_file)
+                        write_metrics_to_file(metrics, "./results/" + result_file_tag(args) + f"-trainset{train_set_id}-rank-{args.rank}" + ".json" if args.result_file is None else args.result_file)
         else:
             if args.num_eval is not None:
                 eval_samples = task.sample_subset(data_split="valid", seed=0, num=args.num_eval)
@@ -688,9 +713,11 @@ def main():
                 eval_samples = task.valid_samples
 
             metrics = framework.evaluate(train_sets, eval_samples, False)
+            for metric in metrics:
+                wandb.log({"eval/"+metric: metrics[metric]})
             logger.info(metrics)
             if args.local_rank <= 0:
-                write_metrics_to_file(metrics, "result/" + result_file_tag(
+                write_metrics_to_file(metrics, "./results/" + result_file_tag(
                     args) + "-onetrainpereval.json" if args.result_file is None else args.result_file)
 
 
